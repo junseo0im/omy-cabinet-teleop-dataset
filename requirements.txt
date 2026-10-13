@@ -1,0 +1,9 @@
+# Python 3.11 (conda env)
+mujoco==3.13.0
+pin==4.1.0            # Pinocchio (IK / FK)
+lerobot==0.3.3
+torch==2.7.1          # CPU build is enough for data collection
+torchvision==0.22.1
+opencv-python
+glfw
+matplotlib

@@ -1,0 +1,20 @@
+# collected datasets / recordings (large)
+dataset/
+*.rrd
+
+# scratch / test outputs
+_dbg/
+docs/figures/_scripted_*
+asset/robotis_omy/assets/lowpoly/
+
+# python
+__pycache__/
+*.pyc
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
+
+# office lock files
+~$*.docx

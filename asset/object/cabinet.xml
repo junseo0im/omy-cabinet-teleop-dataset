@@ -1,0 +1,57 @@
+<mujoco model="small_drawer">
+  <asset>
+    <!-- 색상 미리 지정 -->
+    <material name="wood" rgba="0.6 0.4 0.3 1"/>
+  </asset>
+
+  <worldbody>
+    <body name="cabinet_root"  pos="0.0 0.0 0.0">
+      <body name="table" pos="0.1 -0.7 0">
+        <!-- 상판 -->
+        <geom type="box" size="0.18 0.18 0.02" pos="0 0 0.1" material="wood"/>
+
+        <!-- 다리 4개 -->
+        <geom type="box" size="0.01 0.01 0.05" pos=" 0.16  0.16 0.05" material="wood"/>
+        <geom type="box" size="0.01 0.01 0.05" pos="-0.16  0.16 0.05" material="wood"/>
+        <geom type="box" size="0.01 0.01 0.05" pos=" 0.16 -0.16 0.05" material="wood"/>
+        <geom type="box" size="0.01 0.01 0.05" pos="-0.16 -0.16 0.05" material="wood"/>
+      </body>
+
+
+      <!-- 서랍장 본체 -->
+      <body name="cabinet" pos="0.1 -0.7 0.1">
+        <!-- 좌우측면 -->
+        <geom type="box" size="0.0125 0.125 0.2" pos="-0.1125 0 0.2" material="wood"/>
+        <geom type="box" size="0.0125 0.125 0.2" pos="0.1125 0 0.2" material="wood"/>
+        <!-- 윗면/바닥면 -->
+        <geom type="box" size="0.125 0.125 0.0125" pos="0 0 0.3875" material="wood"/>
+        <geom type="box" size="0.125 0.125 0.0125" pos="0 0 0.0125" material="wood"/>
+        <!-- 뒷판 -->
+        <geom type="box" size="0.125 0.0125 0.2" pos="0 -0.1125 0.2" material="wood"/>
+        <!-- 앞판 -->
+        <geom type="box" size="0.125 0.0125 0.125" pos="0 0.1125 0.125" material="wood"/>
+      </body>
+
+
+      <!-- 서랍 (슬라이딩) -->
+      <body name="drawer" pos="0.1 -0.65 0.4">
+        <!-- 1. 슬라이딩이 가능하도록 서랍장 MJCF 형식으로 제작 -->
+        <!-- 손잡이가 +y(로봇 쪽)에 있으므로 +y 방향으로 최대 15cm 당겨지는 직선(slide) 관절 -->
+        <joint name="drawer_slide" type="slide" axis="0 1 0" range="0 0.15"/>
+
+        <!-- 서랍 앞/뒤/좌/우/바닥 -->
+        <geom type="box" size="0.08 0.008 0.04" pos="0 0.09 0" material="wood"  contype="1" conaffinity="1"/> 
+        <geom type="box" size="0.08 0.008 0.04" pos="0 -0.09 0" material="wood"/>
+        <geom type="box" size="0.008 0.07 0.04" pos="-0.09 0 0" material="wood"/>
+        <geom type="box" size="0.008 0.07 0.04" pos="0.09 0 0" material="wood"/>
+        <geom type="box" size="0.07 0.06 0.0035" pos="0 0 -0.04" material="wood"/>
+
+        <!-- 손잡이 -->
+        <geom type="box" size="0.005 0.02 0.01" pos="-0.03 0.12 0.02" material="wood"/>
+        <geom type="box" size="0.005 0.02 0.01" pos="0.03 0.12 0.02" material="wood"/>
+        <geom name="handle" type="box" size="0.03 0.005 0.01" pos="0 0.135 0.02" material="wood" contype="1" conaffinity="1"/>
+      </body>
+    </body>
+
+  </worldbody>
+</mujoco>

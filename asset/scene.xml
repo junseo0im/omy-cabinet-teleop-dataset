@@ -1,0 +1,4 @@
+<mujoco model="main scene">
+  <include file="robotis_omy/scene.xml"/>
+  <include file="object/cabinet.xml"/>
+</mujoco>
