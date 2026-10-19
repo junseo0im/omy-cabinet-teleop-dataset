@@ -1,111 +1,168 @@
 # OMY Cabinet Teleoperation & Dataset
 
-MuJoCo 시뮬레이터에서 ROBOTIS **OpenManipulator-Y (OMY)** 6축 로봇팔로 **서랍을 여는 작업**을 수행하고,
-키보드 텔레오퍼레이션으로 전문가 시연을 수집해 **LeRobot 데이터셋**으로 저장하는 파이프라인.
-캐비넷 위치를 에피소드마다 바꿔 다양한 환경에서의 데이터를 모을 수 있으며, 로봇이 실제로 작업 가능한 위치만 고르도록 **IK 기반 도달 가능성 검사**를 함께 수행한다.
+MuJoCo에서 OMY 로봇팔로 서랍을 열고, 키보드 시연을 LeRobot 데이터셋으로 기록하는 프로젝트입니다.
+캐비넷을 세 위치에 배치해 총 **9개 에피소드·2,520프레임**을 수집하고, 손목 카메라 영상과 현재 상태·목표 명령을 확인했습니다.
 
-<p align="center">
-  <img src="docs/figures/scene_drawer_opened.png" width="48%">
-  <img src="docs/figures/grasp_closeup.png" width="48%">
-</p>
+![세 캐비넷 배치](docs/figures/three_positions/scene_three_positions.png)
 
-## 주요 기능
+위 그림은 수집에 사용한 배치를 같은 시점에서 재현한 화면입니다. 로봇 초기 자세를 유지하고 캐비넷 묶음의 위치를 바꿉니다.
 
-- **슬라이딩 서랍장 (MJCF)**: `drawer_slide` 직선 관절(+y, 0–15 cm)을 가진 캐비넷 모델
-- **키보드 텔레오퍼레이션**: 키 입력 → 엔드이펙터 목표 자세 → Pinocchio IK → 관절 위치 제어 (50 Hz)
-- **LeRobot 데이터셋 기록**: 손목 카메라 이미지(480×640) + 상태 + 행동 + 캐비넷 위치
-- **캐비넷 배치 모드**: `fixed` / `grid` (3×3 순환) / `random` (도달 불가능 위치 자동 제외)
-- **분석 도구**: 작업공간 도달 가능성 히트맵, 데이터셋 위치 분포·궤적·프레임 시각화
+## 구현 내용
 
-## 구조
+- **서랍 모델**: MJCF slide 관절로 +y 방향 최대 15 cm 이동
+- **키보드 제어**: 말단 목표 위치·자세를 변경하고 Pinocchio IK로 관절 명령 계산
+- **반복 수집**: 세 위치에서 각 3회 수집, 저장 후 초기화·재배치, 중단한 순서부터 재개
+- **LeRobot 기록**: 손목 RGB 영상, 10D state/action, 캐비넷 위치를 50 Hz로 저장
+- **실행 옵션**: 이동·회전 속도 설정, 그림자·반사 생략, Linux OpenCV Qt 폰트 경로 보정
+- **검증**: Rerun 시각화와 전체 프레임 읽기, 수치·인덱스·타임스탬프 검사
 
-```
-.
-├── asset/
-│   ├── scene.xml                # 로봇 + 캐비넷 통합 장면
-│   ├── object/cabinet.xml       # 슬라이딩 서랍장
-│   ├── robotis_omy/             # OMY MJCF 모델 (ROBOTIS, Apache-2.0)
-│   └── urdf_omy/omy.urdf        # Pinocchio IK용 URDF
-├── src/
-│   ├── teleoperation.py         # 키보드 조종 (기록 없음)
-│   ├── collect_data.py          # 키보드 조종 + LeRobot 데이터셋 기록
-│   ├── cabinet_spawn.py         # 캐비넷 배치 / 도달 가능성 검사
-│   └── ik.py                    # Damped least-squares IK
-├── analysis/
-│   ├── workspace_analysis.py    # 캐비넷 위치별 도달 가능성 분석
-│   └── plot_dataset.py          # 데이터셋 요약 그림
-└── docs/figures/                # README / 보고서용 그림
+```text
+키보드 입력 → 말단 목표 자세 → IK → 로봇 관절 제어
+                     ↓
+      현재 state + 목표 action + 손목 영상 + 캐비넷 위치
+                     ↓
+             LeRobot 데이터셋 → 시각화·검증
 ```
 
-## 환경
+## 수집 결과
 
-| 항목 | 버전 |
+좌표는 `cabinet_root` 기본 위치에 대한 이동량입니다. 캐비넷 본체·서랍·테이블이 함께 이동합니다.
+
+| 위치 | 이동량 (x, y, z), m | 에피소드 인덱스 | 에피소드 수 | 프레임 수 |
+|---|---|---|---:|---:|
+| P1 | (0.00, 0.00, 0.00) | 0–2 | 3 | 763 |
+| P2 | (−0.06, −0.05, 0.00) | 3–5 | 3 | 1,062 |
+| P3 | (+0.06, −0.05, 0.00) | 6–8 | 3 | 695 |
+| 합계 | 3개 위치 | 0–8 | **9** | **2,520** |
+
+50 Hz 기준 데이터셋 시간은 50.40초이며, 실제 조작에 걸린 시간과는 구분됩니다.
+프레임별 메타데이터 검사 결과는 [데이터 요약](docs/dataset_summary.json)에 저장했습니다.
+
+![실제 수집한 손목 카메라 프레임](docs/figures/three_positions/recorded_frames_three_positions.png)
+
+각 행은 P1·P2·P3의 대표 시연(에피소드 인덱스 0·4·7), 각 열은 시작·중간·마지막 프레임입니다. 저장된 이미지에서 직접 추출했습니다.
+
+### 현재 상태와 목표 명령 확인
+
+![Rerun에서 확인한 첫 에피소드](docs/figures/three_positions/rerun_episode0.png)
+
+`lerobot.scripts.visualize_dataset`으로 첫 에피소드의 영상과 state/action을 함께 확인했습니다.
+이동 중에는 action이 현재 state보다 진행 방향으로 앞선 목표를 나타내는지 살펴봤습니다.
+
+![y축 현재 위치와 목표 위치 비교](docs/figures/three_positions/state_action_lead.png)
+
+| 첫 에피소드의 구간 | 프레임 | state y, m | action y, m | action − state |
+|---|---:|---:|---:|---:|
+| −y 방향 접근 | 143 | −0.25527 | −0.25850 | −3.23 mm |
+| +y 방향 당기기 | 280 | −0.29313 | −0.28250 | +10.63 mm |
+
+접근할 때는 더 작은 y값, 당길 때는 더 큰 y값이 앞선 목표입니다. 이는 같은 프레임의 현재 위치와 목표 위치 차이이며, 시간축을 옮겨 비교한 결과는 아닙니다. 정지하거나 목표에 도달하면 두 값이 비슷할 수 있습니다.
+
+## 실행 환경
+
+Ubuntu 22.04 · WSL2/WSLg · Python 3.11에서 실행했습니다.
+
+| 라이브러리 | 사용 버전 |
 |---|---|
-| OS | Ubuntu 22.04 (WSL2 + WSLg) |
-| Python | 3.11 (conda) |
 | MuJoCo | 3.13.0 |
-| Pinocchio | 4.1.0 (`pin`) |
+| Pinocchio (`pin`) | 4.1.0 |
 | LeRobot | 0.3.3 |
+| PyTorch | 2.7.1, CPU |
 
 ```bash
-conda create -n mani python=3.11 -y && conda activate mani
+git clone https://github.com/junseo0im/omy-cabinet-teleop-dataset.git
+cd omy-cabinet-teleop-dataset
+conda create -n mani python=3.11 -y
+conda activate mani
 pip install -r requirements.txt
 ```
 
-## 실행
+### 키보드 조작
 
 ```bash
 cd src
-python teleoperation.py                              # 조종 연습
-python collect_data.py                               # 랜덤 위치, 50 에피소드
-SPAWN_MODE=grid NUM_DEMO=9 python collect_data.py    # 3x3 격자 위치에서 1개씩
+SPAWN_MODE=three FAST_RENDER=1 MOVE_SPEED=0.15 ROT_SPEED=0.3 python teleoperation.py
 ```
 
-| 키 | 동작 |
+MuJoCo 뷰어 창에 포커스를 둔 상태에서 입력합니다.
+
+| 키 | 기능 |
 |---|---|
-| ← / → | 엔드이펙터 −y (캐비넷 쪽) / +y (로봇 쪽) |
-| ↑ / ↓ | 엔드이펙터 −x / +x |
-| J / K | 엔드이펙터 아래 / 위 |
-| Y / U | roll + / − (그리퍼 기울기) |
+| ← / → | −y 접근 / +y 당기기 |
+| ↑ / ↓ | −x / +x 이동 |
+| J / K | 아래 / 위 이동 |
+| Y / U | roll 증가 / 감소 |
 | Space | 그리퍼 닫기 / 열기 |
-| Right Shift | 녹화 시작 |
-| Left Shift | 에피소드 저장 후 리셋 (다음 캐비넷 위치로 재배치) |
+| Right Shift | 녹화 시작 (`collect_data.py`) |
+| Left Shift | 초기화; 수집 프로그램에서는 에피소드 저장 후 초기화 |
 
-> 키는 한 번 누르면 다른 키를 누를 때까지 계속 적용된다.
-> 키로 움직이는 제어점은 손목 플랜지(`link6`)이며, 실제 손가락 끝은 그보다 약 22 cm 앞에 있다.
-> 손목 카메라의 **빨간 점**이 손가락 끝 기준점이다.
+이동·회전 키는 다른 키를 누를 때까지 적용됩니다. U는 roll을 감소시키는 키이므로 수평 자세에서 다른 키로 회전을 멈춥니다.
+제어 프레임은 손목 플랜지이며, 손목 영상의 빨간 표식은 손가락 쪽 기준점입니다.
 
-### 데이터셋 시각화
+### 데이터 수집
+
+`src`에서 실행합니다.
 
 ```bash
+SPAWN_MODE=three NUM_DEMO=9 FAST_RENDER=1 MOVE_SPEED=0.15 ROT_SPEED=0.3 python collect_data.py
+```
+
+`three` 모드는 P1·P2·P3에서 각각 3회 수집합니다. `NUM_DEMO`는 이미 저장된 에피소드를 포함한 총 목표 개수입니다.
+시작 메뉴에서 **1번은 기존 데이터 삭제 후 새로 생성**, **2번은 이어서 수집**입니다. 각 에피소드마다 Right Shift로 녹화를 시작하고 Left Shift로 저장합니다.
+`fixed`, `grid`, `random` 배치 모드도 지원합니다.
+
+| 옵션 | 기본값 | 의미 |
+|---|---|---|
+| `MOVE_SPEED` | 0.1 | 이동 속도, m/s (시뮬레이션 시간 기준) |
+| `ROT_SPEED` | 0.1 | 회전 속도, rad/s (시뮬레이션 시간 기준) |
+| `FAST_RENDER` | 0 | 1이면 그림자·반사 생략 |
+
+### 수집 데이터 다운로드·시각화
+
+원본 데이터는 [v0.1.0 릴리스](https://github.com/junseo0im/omy-cabinet-teleop-dataset/releases/tag/v0.1.0)의 `cabinet-opening-three-positions.zip`으로 제공합니다. `SHA256SUMS`로 파일 해시를 확인할 수 있습니다.
+다운로드한 ZIP을 레포 루트에서 풀면 `dataset/cabinet_opening_three_positions/`가 생성됩니다.
+
+```bash
+# 레포 루트에서
+unzip cabinet-opening-three-positions.zip
+cd src
 python -m lerobot.scripts.visualize_dataset --repo-id OMY \
-    --root ../dataset/cabinet_opening_random_spawn --episode-index 0 --save 1 --output-dir ../rrd
-rerun --web-viewer ../rrd/OMY_episode_0.rrd     # 브라우저에서 http://localhost:9090
-cd ../analysis && python plot_dataset.py ../dataset/cabinet_opening_random_spawn 0
+  --root ../dataset/cabinet_opening_three_positions --episode-index 0 --num-workers 0
+```
+
+구조 검증과 추가 그래프는 `analysis`에서 실행합니다.
+
+```bash
+cd ../analysis
+python audit_dataset.py --root ../dataset/cabinet_opening_three_positions \
+  --output ../docs/dataset_summary.json
+python plot_dataset.py ../dataset/cabinet_opening_three_positions 0
 ```
 
 ## 데이터 형식
 
-| key | shape | 내용 |
+| 필드 | 형태 | 내용 |
 |---|---|---|
 | `observation.wrist_image` | (480, 640, 3) | 손목 카메라 RGB |
-| `observation.state` | (10,) | 현재 EE 위치(3) + 6D 회전(6) + 그리퍼(1) |
-| `action` | (10,) | 목표 EE 위치(3) + 6D 회전(6) + 목표 그리퍼(1) |
-| `cabinet_pos` | (3,) | 해당 에피소드의 캐비넷 위치 (정책 입력에는 사용되지 않음) |
+| `observation.state` | (10,) | 현재 위치 3 + 6D 회전 표현 6 + 그리퍼 1 |
+| `action` | (10,) | 목표 위치 3 + 6D 회전 표현 6 + 그리퍼 명령 1 |
+| `cabinet_pos` | (3,) | cabinet_root 이동량 |
 
-<p align="center"><img src="docs/figures/wrist_camera_view.png" width="45%"></p>
+영상은 Parquet 안의 이미지 바이트로 저장합니다. 별도 MP4 파일은 생성하지 않았습니다.
+state/action의 인덱스 0–2는 위치, 3–8은 회전 표현, 9는 그리퍼 값입니다.
 
-## 캐비넷 위치와 도달 가능성
+## 범위와 한계
 
-캐비넷을 (x, y) 격자로 옮겨가며 손잡이 파지 자세와 서랍을 15 cm 당긴 자세에 대해 IK 해를 계산했다.
+수집 중 뷰어에서 서랍 열림을 확인했습니다. 전체 2,520프레임의 영상 읽기, 유한한 state/action, 프레임 인덱스와 50 Hz 타임스탬프를 검사했습니다.
+서랍 변위와 성공 라벨은 별도로 기록하지 않아 정량 성공률은 산출하지 않았으며, 모방학습과 새로운 위치에 대한 일반화 성능은 아직 평가하지 않았습니다.
+배치 전 IK 검사는 파지·당기기 끝점의 도달 가능성과 관절 범위를 확인합니다. 연속 경로의 충돌 검사는 포함하지 않습니다.
 
-<p align="center"><img src="docs/figures/workspace_reachability.png" width="70%"></p>
+## 파일 구성과 참고
 
-- 기본 랜덤 범위(x ±0.1 m, y −0.125–0 m) 54칸 중 53칸에서 파지·열기 모두 가능하며, 오른쪽 아래 모서리(x = 0.1, y = −0.125)는 도달 불가.
-- 캐비넷이 로봇에 가까워지면(y > 0.04) 손잡이는 잡을 수 있지만 팔이 접혀 15 cm를 당기지 못한다.
-- 격자 모드의 9개 위치는 모두 작업 가능 영역 안에 있다.
-- 분석은 IK 해 존재와 관절 한계만 고려하며, 팔–캐비넷 충돌은 포함하지 않는다.
+- `src/`: 키보드 제어, IK, 수집·배치·실행 옵션
+- `asset/`: MJCF, URDF, 메시 파일
+- `analysis/`: 도달 가능성 분석, 데이터 검증·그래프 생성
+- `docs/`: 수집 결과 요약과 이미지
 
-## 결과
-
-텔레오퍼레이션 데이터 수집 결과와 데이터셋 시각화는 수집 후 추가.
+로봇 조작 실습 reference code를 바탕으로 배치 계획, 수집 재개, 실행 옵션과 결과 검증을 확장했습니다.
+ROBOTIS OMY 모델의 라이선스는 [원본 라이선스](asset/robotis_omy/LICENSE)를 따릅니다.

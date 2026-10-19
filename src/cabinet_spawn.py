@@ -3,6 +3,7 @@
 collect_data.py / teleoperation.py 에서 에피소드마다 캐비넷(cabinet_root) 위치를 바꿔 주기 위해 사용한다.
 
 mode
+  - 'three'  : 기본/왼쪽 뒤/오른쪽 뒤 위치에서 3/3/3회 수집
   - 'fixed'  : 항상 기본 위치 (0, 0, 0)
   - 'grid'   : GRID_POSITIONS 를 에피소드마다 순서대로 순환 (위치별 데이터 수를 균등하게)
   - 'random' : X_RANGE x Y_RANGE 에서 균등 분포로 샘플링
@@ -24,6 +25,15 @@ Y_RANGE = (-0.125, 0.0)
 # 3 x 3 격자 (x: 좌/우, y: 앞/뒤)
 GRID_POSITIONS = [(x, y, 0.0) for y in (-0.1, -0.05, 0.0) for x in (-0.1, 0.0, 0.1)]
 
+# cabinet_root 이동량(m)과 위치별 수집 개수
+THREE_POSITION_PLAN = (
+    ((0.0, 0.0, 0.0), 3),
+    ((-0.06, -0.05, 0.0), 3),
+    ((0.06, -0.05, 0.0), 3),
+)
+THREE_POSITION_EPISODES = sum(count for _, count in THREE_POSITION_PLAN)
+
+
 Q0 = np.array([1.57079629, 0.325819591, -1.73266281, 0.930127424, -1.57079296, -1.57080310, 0, 0, 0, 0])
 EE_ROTVEC_0 = np.array([0.37008376, -1.53892958, -0.37008376])
 LEVEL_ROLL = -0.4727     # 그리퍼를 수평으로 만드는 roll
@@ -33,8 +43,8 @@ PULL = 0.15              # 서랍 최대 이동량 (drawer_slide range)
 
 class CabinetSpawner:
     def __init__(self, mj_model, pin_model, frame_id, mode="random",
-                 x_range=X_RANGE, y_range=Y_RANGE, grid=GRID_POSITIONS, check_reach=True):
-        assert mode in ("fixed", "grid", "random"), mode
+                 x_range=X_RANGE, y_range=Y_RANGE, grid=GRID_POSITIONS, check_reach=True, start_episode=0):
+        assert mode in ("fixed", "grid", "random", "three"), mode
         self.mj_model, self.mode = mj_model, mode
         self.x_range, self.y_range = x_range, y_range
         self.check_reach = check_reach
@@ -54,7 +64,16 @@ class CabinetSpawner:
         dropped = len(grid) - len(self.grid)
         if mode == "grid" and dropped:
             print(f"[CabinetSpawner] {dropped} grid position(s) are unreachable and were removed.")
-        self.count = 0
+        self.plan = []
+        if mode == "three":
+            for position, count in THREE_POSITION_PLAN:
+                pos = np.array(position, dtype=float)
+                if not self.is_reachable(pos):
+                    raise ValueError(f"Planned cabinet position is unreachable: {position}")
+                self.plan.extend([pos.copy() for _ in range(count)])
+            if not 0 <= start_episode <= len(self.plan):
+                raise ValueError("Saved episode count exceeds the three-position plan")
+        self.count = start_episode
 
     def handle_pos(self, cabinet_pos):
         return np.asarray(cabinet_pos) + self.handle_offset
@@ -83,7 +102,11 @@ class CabinetSpawner:
         return ok_open
 
     def next_position(self):
-        if self.mode == "fixed":
+        if self.mode == "three":
+            if self.count >= len(self.plan):
+                raise StopIteration(f"All {len(self.plan)} planned episodes have been collected")
+            pos = self.plan[self.count].copy()
+        elif self.mode == "fixed":
             pos = np.zeros(3)
         elif self.mode == "grid":
             pos = self.grid[self.count % len(self.grid)].copy()

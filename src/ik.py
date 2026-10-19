@@ -20,7 +20,7 @@ def solve_ik_safe(model, data, ee_frame_id, q_init, target_SE3,
         current_SE3 = data.oMf[ee_frame_id]
 
         err_SE3 = current_SE3.actInv(target_SE3)
-        err = pin.log(err_SE3).vector  # 6D (3 for rotation, 3 for translation)
+        err = pin.log(err_SE3).vector  # SE(3) 오차 벡터(6차원)
 
         if norm(err) < eps:
             success = True

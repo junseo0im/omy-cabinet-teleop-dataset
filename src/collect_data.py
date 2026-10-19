@@ -9,7 +9,8 @@ import pinocchio as pin
 import shutil
 
 from ik import solve_ik_safe
-from cabinet_spawn import CabinetSpawner
+from cabinet_spawn import CabinetSpawner, THREE_POSITION_EPISODES
+from teleop_options import control_options, configure_rendering
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -50,15 +51,15 @@ def mat_to_rot6d(mat):
     out = mat[..., :2, :].copy().reshape(batch_dim + (6,))
     return out
 
-# 캐비넷 배치 방식 (cabinet_spawn.py 참고)
-#   'fixed' : 기본 위치 고정
-#   'grid'  : 3x3 격자 위치를 에피소드마다 순환
-#   'random': 범위 내 무작위 (도달 불가능한 위치는 IK 검사로 제외)
-#   실행 시 환경변수로 변경 가능: SPAWN_MODE=grid python collect_data.py
+# 배치 모드: three(3개 위치에서 각 3회), fixed, grid, random
 SPAWN_MODE = os.environ.get('SPAWN_MODE', 'random')
 
-NUM_DEMO  = int(os.environ.get('NUM_DEMO', 50))
+# three 모드의 목표 개수에는 이미 저장한 에피소드도 포함한다.
+NUM_DEMO = int(os.environ.get('NUM_DEMO', THREE_POSITION_EPISODES if SPAWN_MODE == 'three' else 50))
+if NUM_DEMO <= 0 or (SPAWN_MODE == 'three' and NUM_DEMO > THREE_POSITION_EPISODES):
+    raise ValueError(f'NUM_DEMO must be positive and cannot exceed {THREE_POSITION_EPISODES} in three-position mode')
 ROOT = {
+    'three':  '../dataset/cabinet_opening_three_positions',
     'fixed':  '../dataset/cabinet_opening',
     'grid':   '../dataset/cabinet_opening_grid_spawn',
     'random': '../dataset/cabinet_opening_random_spawn',
@@ -84,7 +85,7 @@ while True:
         if os.path.exists(ROOT):
             shutil.rmtree(ROOT)
             
-        # LeRobotDataset.create 함수를 사용하여 새로운 데이터셋 생성
+        # 새 데이터셋 생성
         # state  = 현재 EE 위치(3) + 6D 회전(6) + 그리퍼(1)
         # action = 목표 EE 위치(3) + 6D 회전(6) + 목표 그리퍼(1)
         dataset = LeRobotDataset.create(
@@ -108,8 +109,7 @@ while True:
                     "shape": (10,),
                     "names": ["action"],
                 },
-                # 에피소드의 캐비넷 위치 기록용 (분포 확인/위치별 분석).
-                # 'observation.' 로 시작하지 않으므로 ACT 정책 입력으로는 사용되지 않음.
+                # 위치별 수집 결과를 구분하기 위한 필드
                 "cabinet_pos": {
                     "dtype": "float32",
                     "shape": (3,),
@@ -134,6 +134,7 @@ while True:
             
         else:
             print(f"The folder {ROOT} does not exist.")
+            continue
         
         break
     
@@ -141,6 +142,11 @@ while True:
         print("Invalid input. Please enter 1 or 2.")
         continue
         
+
+saved_episodes = dataset.meta.total_episodes
+if SPAWN_MODE == 'three' and saved_episodes >= NUM_DEMO:
+    print(f"Already saved {saved_episodes}/{NUM_DEMO} episodes. Collection target complete.")
+    raise SystemExit(0)
 
 mj_model = mujoco.MjModel.from_xml_path(xml_path)
 mj_data = mujoco.MjData(mj_model)
@@ -150,13 +156,14 @@ pin_model, _, _ = pin.buildModelsFromUrdf(urdf_path, package_dirs=[mesh_path])
 pin_data = pin_model.createData()
 frame_id = pin_model.getFrameId("tcp_link")
 
-spawner = CabinetSpawner(mj_model, pin_model, frame_id, mode=SPAWN_MODE)
+spawner = CabinetSpawner(mj_model, pin_model, frame_id, mode=SPAWN_MODE,
+                         start_episode=saved_episodes if SPAWN_MODE == 'three' else 0)
 cabinet_pos = spawner.next_position()
 spawner.apply(mj_data, cabinet_pos)
 print(f"Cabinet position ({SPAWN_MODE}): {np.round(cabinet_pos, 3)}")
 
 action = np.zeros(7)
-episode_id = 0
+episode_id = saved_episodes if SPAWN_MODE == 'three' else 0
 record_flag = False
 
 q0 = np.array([1.57079629, 0.325819591, -1.73266281, 0.930127424, -1.57079296, -1.57080310,0,0,0,0])
@@ -172,12 +179,15 @@ pre_keycode = None
 gripper_state = False
 
 dt = 0.02 # 50Hz
+move_delta, rotation_delta, fast_render = control_options(dt)
 
 t0 = time.time()
 t = 0.0
 try:
     with mj_view.launch_passive(mj_model, mj_data, key_callback=key_callback) as viewer:
         renderer = mujoco.Renderer(mj_model, 480, 640)
+        configure_rendering(renderer.scene, fast_render)
+        configure_rendering(viewer.user_scn, fast_render)
         
         viewer.cam.azimuth = 200
         viewer.cam.elevation = -25
@@ -192,36 +202,40 @@ try:
         eulers = np.zeros(3)
 
         while viewer.is_running() and episode_id < NUM_DEMO:
-            # End Effector의 z 좌표를 위아래로 움직이기 위한 코드 (J: 아래, K: 위)
+            # 키 입력에 따른 목표 위치와 자세 변경
             if key_state.get(glfw.KEY_J):
-                ee_position[2] -= delta
+                ee_position[2] -= move_delta
             elif key_state.get(glfw.KEY_K):
-                ee_position[2] += delta
+                ee_position[2] += move_delta
             elif key_state.get(glfw.KEY_LEFT):
-                ee_position[1] -= delta
+                ee_position[1] -= move_delta
             elif key_state.get(glfw.KEY_RIGHT):
-                ee_position[1] += delta
+                ee_position[1] += move_delta
             elif key_state.get(glfw.KEY_UP):
-                ee_position[0] -= delta
+                ee_position[0] -= move_delta
             elif key_state.get(glfw.KEY_DOWN):
-                ee_position[0] += delta
+                ee_position[0] += move_delta
             elif key_state.get(glfw.KEY_Y):
-                eulers[0] += delta 
+                eulers[0] += rotation_delta
             elif key_state.get(glfw.KEY_U):
-                eulers[0] -= delta 
+                eulers[0] -= rotation_delta
             elif key_state.get(glfw.KEY_LEFT_SHIFT):
-                if dataset.episode_buffer["size"] == 0:
+                if dataset.episode_buffer is None or dataset.episode_buffer["size"] == 0:
                     print("Please start recording first by pressing Right Shift + any movement key")
                     key_state = {}
                     continue
 
                 print(f"Resetting the environment for the next episode: {episode_id}/{NUM_DEMO}")
-                episode_id += 1
                 record_flag = False
                 
                 dataset.save_episode()
+                episode_id += 1
+                print(f"Saved {episode_id}/{NUM_DEMO} episodes at cabinet position {np.round(cabinet_pos, 3)}")
+                if episode_id >= NUM_DEMO:
+                    print("Collection target complete.")
+                    break
 
-                # End Effector의 위치와 자세, 로봇의 관절각도, Cabinet을 초기 상태로 리셋
+                # 로봇과 서랍을 초기 상태로 되돌린다.
                 ee_position = ee_position_0.copy()
                 eulers = np.zeros(3)
                 gripper_state = False
@@ -248,7 +262,6 @@ try:
             T_target = pin.SE3(R_target, ee_position)
 
             ee_rotvec_target = pin.log3(R_target)
-            # print(f"ee position: {ee_position}, ee rotvec: {ee_rotvec_target}, joint pos: {mj_data.qpos[:pin_model.nq]}")
             q = np.copy(mj_data.qpos[:pin_model.nq])
             pin.forwardKinematics(pin_model, pin_data, q)
             pin.updateFramePlacements(pin_model, pin_data)
@@ -277,14 +290,13 @@ try:
             cv2.imshow("Wrist Camera", rgb_overlay)
 
             wrist_image = cv2.cvtColor(rgb_overlay, cv2.COLOR_BGR2RGB)
-            # wrist_image = cv2.resize(wrist_image, (256, 256), interpolation=cv2.INTER_LINEAR)
 
             state = np.concatenate([current_ee_pose, [q[-2]]], axis=0)
             action = np.concatenate([target_ee_pose, [q_sol[-2]]], axis=0)
                 
             cv2.waitKey(1)
             if record_flag:
-                # 데이터셋에 프레임 추가: 손목 카메라 이미지 + 현재 상태(state) + 목표 행동(action)
+                # 시뮬레이션을 진행하기 전 현재 관측과 목표 명령을 기록한다.
                 dataset.add_frame( {
                         "observation.wrist_image": wrist_image,
                         "observation.state": state,
@@ -294,7 +306,6 @@ try:
                 )
 
             for _ in range(int(dt / 0.002)):
-                # mujoco.mj_forward(mj_model, mj_data)
                 mujoco.mj_step(mj_model, mj_data)
 
             t += dt

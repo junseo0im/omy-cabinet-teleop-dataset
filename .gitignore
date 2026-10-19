@@ -18,3 +18,7 @@ __pycache__/
 
 # office lock files
 ~$*.docx
+
+# local reports and downloadable archives
+*.docx
+*.zip

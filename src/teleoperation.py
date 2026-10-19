@@ -9,6 +9,7 @@ import pinocchio as pin
 
 from ik import solve_ik_safe
 from cabinet_spawn import CabinetSpawner
+from teleop_options import control_options, configure_rendering
 
 def key_callback(keycode):
     global pre_keycode, key_state, gripper_state
@@ -44,7 +45,7 @@ def mat_to_rot6d(mat):
     out = mat[..., :2, :].copy().reshape(batch_dim + (6,))
     return out
 
-# 캐비넷 배치 방식: 'fixed' | 'grid' | 'random' (cabinet_spawn.py 참고)
+# 캐비넷 배치 방식: 'fixed' | 'grid' | 'random' | 'three' (cabinet_spawn.py 참고)
 SPAWN_MODE = os.environ.get('SPAWN_MODE', 'random')
 
 REPO_NAME = 'OMY'
@@ -84,12 +85,15 @@ pre_keycode = None
 gripper_state = False
 
 dt = 0.02 # 50Hz
+move_delta, rotation_delta, fast_render = control_options(dt)
 
 t0 = time.time()
 t = 0.0
 try:
     with mj_view.launch_passive(mj_model, mj_data, key_callback=key_callback) as viewer:
         renderer = mujoco.Renderer(mj_model, 480, 640)
+        configure_rendering(renderer.scene, fast_render)
+        configure_rendering(viewer.user_scn, fast_render)
         
         viewer.cam.azimuth = 200
         viewer.cam.elevation = -25
@@ -104,27 +108,27 @@ try:
         eulers = np.zeros(3)
 
         while viewer.is_running():
-            # End Effector의 z 좌표를 위아래로 움직이기 위한 코드 (J: 아래, K: 위)
+            # 키 입력에 따른 목표 위치와 자세 변경
             if key_state.get(glfw.KEY_J):
-                ee_position[2] -= delta
+                ee_position[2] -= move_delta
             elif key_state.get(glfw.KEY_K):
-                ee_position[2] += delta
+                ee_position[2] += move_delta
             elif key_state.get(glfw.KEY_LEFT):
-                ee_position[1] -= delta
+                ee_position[1] -= move_delta
             elif key_state.get(glfw.KEY_RIGHT):
-                ee_position[1] += delta
+                ee_position[1] += move_delta
             elif key_state.get(glfw.KEY_UP):
-                ee_position[0] -= delta
+                ee_position[0] -= move_delta
             elif key_state.get(glfw.KEY_DOWN):
-                ee_position[0] += delta
+                ee_position[0] += move_delta
             elif key_state.get(glfw.KEY_Y):
-                eulers[0] += delta 
+                eulers[0] += rotation_delta
             elif key_state.get(glfw.KEY_U):
-                eulers[0] -= delta 
+                eulers[0] -= rotation_delta
             elif key_state.get(glfw.KEY_LEFT_SHIFT):
                 print(f"Resetting the environment.")
 
-                # End Effector의 위치와 자세, 로봇의 관절각도, Cabinet을 초기 상태로 리셋
+                # 로봇과 서랍을 초기 상태로 되돌린다.
                 ee_position = ee_position_0.copy()
                 eulers = np.zeros(3)
                 gripper_state = False
@@ -137,6 +141,8 @@ try:
                 mj_data.ctrl[:pin_model.nq] = q0
 
                 # 캐비넷 위치 재배치 (spawner.apply 내부에서 mj_forward 수행)
+                if SPAWN_MODE == 'three' and spawner.count >= len(spawner.plan):
+                    spawner.count = 0
                 cabinet_pos = spawner.next_position()
                 spawner.apply(mj_data, cabinet_pos)
                 print(f"Cabinet position ({SPAWN_MODE}): {np.round(cabinet_pos, 3)}")
@@ -146,7 +152,6 @@ try:
             T_target = pin.SE3(R_target, ee_position)
 
             ee_rotvec_target = pin.log3(R_target)
-            # print(f"ee position: {ee_position}, ee rotvec: {ee_rotvec_target}, joint pos: {mj_data.qpos[:pin_model.nq]}")
             q = np.copy(mj_data.qpos[:pin_model.nq])
             pin.forwardKinematics(pin_model, pin_data, q)
             pin.updateFramePlacements(pin_model, pin_data)
@@ -175,12 +180,10 @@ try:
             cv2.imshow("Wrist Camera", rgb_overlay)
 
             wrist_image = cv2.cvtColor(rgb_overlay, cv2.COLOR_BGR2RGB)
-            # wrist_image = cv2.resize(wrist_image, (256, 256), interpolation=cv2.INTER_LINEAR)
                 
             cv2.waitKey(1)
 
             for _ in range(int(dt / 0.002)):
-                # mujoco.mj_forward(mj_model, mj_data)
                 mujoco.mj_step(mj_model, mj_data)
 
             t += dt
