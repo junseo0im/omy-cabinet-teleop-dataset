@@ -1,6 +1,9 @@
 # collected datasets / recordings (large)
 dataset/
 *.rrd
+train/
+results/
+*.safetensors
 
 # scratch / test outputs
 _dbg/

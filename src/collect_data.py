@@ -51,19 +51,33 @@ def mat_to_rot6d(mat):
     out = mat[..., :2, :].copy().reshape(batch_dim + (6,))
     return out
 
-# 배치 모드: three(3개 위치에서 각 3회), fixed, grid, random
+# 캐비넷 배치 방식 (cabinet_spawn.py 참고)
+#   'three' : 세 위치에서 각각 3회 수집
+#   'fixed' : 기본 위치 고정
+#   'grid'  : 3x3 격자 위치를 에피소드마다 순환
+#   'random': 범위 내 무작위 (도달 불가능한 위치는 IK 검사로 제외)
+#   실행 시 환경변수로 변경 가능: SPAWN_MODE=grid python collect_data.py
 SPAWN_MODE = os.environ.get('SPAWN_MODE', 'random')
 
-# three 모드의 목표 개수에는 이미 저장한 에피소드도 포함한다.
+# 행동 공간
+#   False (작업공간): state/action = EE 위치(3) + 6D 회전(6) + 그리퍼(1) = 10차원
+#                     + 같은 시점의 관절값을 joint_state / joint_action 으로 함께 기록
+#                       -> tools/make_joint_dataset.py 로 같은 시연의 관절공간 데이터셋을 만들 수 있음
+#   True  (관절공간): state/action = 관절각 6 + 그리퍼 1 = 7차원
+is_joint_space = os.environ.get('JOINT_SPACE', '0') == '1'
+
 NUM_DEMO = int(os.environ.get('NUM_DEMO', THREE_POSITION_EPISODES if SPAWN_MODE == 'three' else 50))
 if NUM_DEMO <= 0 or (SPAWN_MODE == 'three' and NUM_DEMO > THREE_POSITION_EPISODES):
-    raise ValueError(f'NUM_DEMO must be positive and cannot exceed {THREE_POSITION_EPISODES} in three-position mode')
+    raise ValueError(f'NUM_DEMO must be positive and at most {THREE_POSITION_EPISODES} in three mode')
+# 기존 작업공간 시연과 구분해 관절값을 함께 기록한다.
 ROOT = {
-    'three':  '../dataset/cabinet_opening_three_positions',
-    'fixed':  '../dataset/cabinet_opening',
-    'grid':   '../dataset/cabinet_opening_grid_spawn',
-    'random': '../dataset/cabinet_opening_random_spawn',
-}[SPAWN_MODE]
+    'three':  '../dataset/cabinet_opening_three_positions_paired',
+    'fixed':  '../dataset/cabinet_opening_paired',
+    'grid':   '../dataset/cabinet_opening_grid_spawn_paired',
+    'random': '../dataset/cabinet_opening_random_spawn_paired',
+}[SPAWN_MODE] + ('_joint' if is_joint_space else '')
+
+STATE_DIM = 7 if is_joint_space else 10
 
 REPO_NAME = 'OMY'
 TASK_NAME = 'Opening the Cabinet'
@@ -85,37 +99,40 @@ while True:
         if os.path.exists(ROOT):
             shutil.rmtree(ROOT)
             
-        # 새 데이터셋 생성
-        # state  = 현재 EE 위치(3) + 6D 회전(6) + 그리퍼(1)
-        # action = 목표 EE 위치(3) + 6D 회전(6) + 목표 그리퍼(1)
+        features = {
+            "observation.wrist_image": {
+                "dtype": "image",
+                "shape": (480, 640, 3),
+                "names": ["height", "width", "channel"],
+            },
+            "observation.state": {
+                "dtype": "float64",
+                "shape": (STATE_DIM,),
+                "names": ["state"],
+            },
+            "action": {
+                "dtype": "float64",
+                "shape": (STATE_DIM,),
+                "names": ["action"],
+            },
+            # 에피소드의 캐비넷 위치 기록용 (분포 확인/위치별 분석).
+            # 'observation.' / 'action' 으로 시작하지 않는 키는 ACT 정책 입력/출력으로 사용되지 않음.
+            "cabinet_pos": {
+                "dtype": "float32",
+                "shape": (3,),
+                "names": ["x", "y", "z"],
+            },
+        }
+        if not is_joint_space:
+            features["joint_state"] = {"dtype": "float64", "shape": (7,), "names": ["joint_state"]}
+            features["joint_action"] = {"dtype": "float64", "shape": (7,), "names": ["joint_action"]}
+
         dataset = LeRobotDataset.create(
             repo_id=REPO_NAME,
             root = ROOT,
             robot_type="omy",
             fps=50,
-            features={
-                "observation.wrist_image": {
-                    "dtype": "image",
-                    "shape": (480, 640, 3),
-                    "names": ["height", "width", "channel"],
-                },
-                "observation.state": {
-                    "dtype": "float64",
-                    "shape": (10,),
-                    "names": ["state"],
-                },
-                "action": {
-                    "dtype": "float64",
-                    "shape": (10,),
-                    "names": ["action"],
-                },
-                # 위치별 수집 결과를 구분하기 위한 필드
-                "cabinet_pos": {
-                    "dtype": "float32",
-                    "shape": (3,),
-                    "names": ["x", "y", "z"],
-                },
-            },
+            features=features,
             image_writer_threads=10,
             image_writer_processes=5,
         )
@@ -144,8 +161,14 @@ while True:
         
 
 saved_episodes = dataset.meta.total_episodes
+if tuple(dataset.features['observation.state']['shape']) != (STATE_DIM,):
+    raise ValueError('Existing dataset uses a different state representation')
+if tuple(dataset.features['action']['shape']) != (STATE_DIM,):
+    raise ValueError('Existing dataset uses a different action representation')
+if not is_joint_space and not {'joint_state', 'joint_action'} <= set(dataset.features):
+    raise ValueError('Existing dataset has no paired joint values; use the paired collection path')
 if SPAWN_MODE == 'three' and saved_episodes >= NUM_DEMO:
-    print(f"Already saved {saved_episodes}/{NUM_DEMO} episodes. Collection target complete.")
+    print(f'Already saved {saved_episodes}/{NUM_DEMO} episodes. Collection target complete.')
     raise SystemExit(0)
 
 mj_model = mujoco.MjModel.from_xml_path(xml_path)
@@ -202,7 +225,7 @@ try:
         eulers = np.zeros(3)
 
         while viewer.is_running() and episode_id < NUM_DEMO:
-            # 키 입력에 따른 목표 위치와 자세 변경
+            # J/K: 말단 높이 조절
             if key_state.get(glfw.KEY_J):
                 ee_position[2] -= move_delta
             elif key_state.get(glfw.KEY_K):
@@ -230,12 +253,12 @@ try:
                 
                 dataset.save_episode()
                 episode_id += 1
-                print(f"Saved {episode_id}/{NUM_DEMO} episodes at cabinet position {np.round(cabinet_pos, 3)}")
+                print(f'Saved {episode_id}/{NUM_DEMO} episodes at {np.round(cabinet_pos, 3)}')
                 if episode_id >= NUM_DEMO:
-                    print("Collection target complete.")
+                    print('Collection target complete.')
                     break
 
-                # 로봇과 서랍을 초기 상태로 되돌린다.
+                # 말단 목표, 로봇 관절 및 서랍을 초기화한다.
                 ee_position = ee_position_0.copy()
                 eulers = np.zeros(3)
                 gripper_state = False
@@ -291,19 +314,30 @@ try:
 
             wrist_image = cv2.cvtColor(rgb_overlay, cv2.COLOR_BGR2RGB)
 
-            state = np.concatenate([current_ee_pose, [q[-2]]], axis=0)
-            action = np.concatenate([target_ee_pose, [q_sol[-2]]], axis=0)
-                
+            # 관절공간: 관절각 6개(q[:6]) + 그리퍼(q[-2]) = 7차원
+            joint_state = np.concatenate([q[:6], [q[-2]]], axis=0)
+            joint_action = np.concatenate([q_sol[:6], [q_sol[-2]]], axis=0)
+
+            if is_joint_space:
+                state = joint_state
+                action = joint_action
+            else:
+                state = np.concatenate([current_ee_pose, [q[-2]]], axis=0)
+                action = np.concatenate([target_ee_pose, [q_sol[-2]]], axis=0)
+
             cv2.waitKey(1)
             if record_flag:
-                # 시뮬레이션을 진행하기 전 현재 관측과 목표 명령을 기록한다.
-                dataset.add_frame( {
-                        "observation.wrist_image": wrist_image,
-                        "observation.state": state,
-                        "action": action,
-                        "cabinet_pos": cabinet_pos.astype(np.float32),
-                    }, task = TASK_NAME
-                )
+                # 현재 관측과 목표 명령을 같은 프레임에 기록한다.
+                frame = {
+                    "observation.wrist_image": wrist_image,
+                    "observation.state": state,
+                    "action": action,
+                    "cabinet_pos": cabinet_pos.astype(np.float32),
+                }
+                if not is_joint_space:
+                    frame["joint_state"] = joint_state
+                    frame["joint_action"] = joint_action
+                dataset.add_frame(frame, task = TASK_NAME)
 
             for _ in range(int(dt / 0.002)):
                 mujoco.mj_step(mj_model, mj_data)
@@ -322,4 +356,4 @@ renderer.close()
 viewer.close()
 cv2.destroyAllWindows()
 
-shutil.rmtree(dataset.root / 'images')
+shutil.rmtree(dataset.root / 'images', ignore_errors=True)

@@ -1,0 +1,42 @@
+{
+  "shared_hyperparameters": {
+    "chunk_size": 50,
+    "learning_rate": 1E-05,
+    "kl_weight": 10.0,
+    "batch_size": 8,
+    "epochs": 3,
+    "seed": 0,
+    "eval_horizon": 25
+  },
+  "data": {
+    "episodes": 9,
+    "frames": 2306,
+    "train_frames": 1442,
+    "val_frames": 864
+  },
+  "runs": [
+    {
+      "space": "workspace",
+      "dimension": 10,
+      "epochs": 3,
+      "optimizer_updates": 543,
+      "best_val_l1": 0.3142291376510104,
+      "best_epoch": 3,
+      "final_train_l1": 0.15804461297810327,
+      "final_total_loss": 2.6415326724270676,
+      "seconds": 306.847751045
+    },
+    {
+      "space": "joint",
+      "dimension": 7,
+      "epochs": 3,
+      "optimizer_updates": 543,
+      "best_val_l1": 1.9240778060186476,
+      "best_epoch": 2,
+      "final_train_l1": 0.3028597539489709,
+      "final_total_loss": 2.937741713120438,
+      "seconds": 302.12975617200004
+    }
+  ],
+  "interpretation": "Normalized L1 has different action coordinates and dimensions (10 vs 7). Compare early convergence and representation-dependent errors; do not infer task-success superiority."
+}
